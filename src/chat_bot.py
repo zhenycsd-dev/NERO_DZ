@@ -1,5 +1,6 @@
 """
 Умный чат-бот для проверки совместимости компонентов ПК
+С поддержкой проверки пар компонентов (CPU + MB)
 Выполнил: Федоренко Евгений Игоревич, группа ПА-01
 """
 import torch
@@ -50,11 +51,11 @@ class SmartCompatibilityBot:
                 csv_path = os.path.join(self.base_dir, 'data', 'components.csv')
             df = pd.read_csv(csv_path)
             self.components_db = df.to_dict('records')
-            print(f"✅ Загружено {len(self.components_db)} компонентов")
+            print(f" Загружено {len(self.components_db)} компонентов")
             return True
         except Exception as e:
             self.components_db = []
-            print(f"⚠️ База компонентов не загружена: {e}")
+            print(f" База компонентов не загружена: {e}")
             return False
     
     def load_model(self):
@@ -63,7 +64,7 @@ class SmartCompatibilityBot:
             if not os.path.exists(model_path):
                 model_path = os.path.join(self.base_dir, 'src', 'mlp_model.pt')
             if not os.path.exists(model_path):
-                print("⚠️ Модель не найдена")
+                print(" Модель не найдена")
                 return False
             checkpoint = torch.load(model_path, map_location=torch.device('cpu'), weights_only=False)
             self.model = MLP(
@@ -76,18 +77,27 @@ class SmartCompatibilityBot:
             if not os.path.exists(scaler_path):
                 scaler_path = os.path.join(self.base_dir, 'data', 'scaler.pkl')
             if not os.path.exists(scaler_path):
-                print("⚠️ scaler.pkl не найден")
+                print(" scaler.pkl не найден")
                 return False
             with open(scaler_path, 'rb') as f:
                 saved = pickle.load(f)
             self.scaler = saved['scaler']
             self.label_encoders = saved['label_encoders']
             self.is_loaded = True
-            print("✅ Модель и данные загружены успешно!")
+            print(" Модель и данные загружены успешно!")
             return True
         except Exception as e:
-            print(f"❌ Ошибка загрузки: {e}")
+            print(f" Ошибка загрузки: {e}")
             return False
+    
+    def find_component_by_name(self, name):
+        """Поиск компонента по названию (точное или частичное совпадение)"""
+        name_lower = name.lower()
+        for comp in self.components_db:
+            comp_name = str(comp.get('Name', '')).lower()
+            if name_lower in comp_name or comp_name in name_lower:
+                return comp
+        return None
     
     def smart_search(self, query):
         """Умный поиск с приоритетом точных совпадений"""
@@ -95,33 +105,26 @@ class SmartCompatibilityBot:
         query_lower = query.lower().strip()
         words = query_lower.split()
         
-        # Определяем тип запроса
         is_cpu_query = any(word in ['ryzen', 'core', 'i3', 'i5', 'i7', 'i9', 'athlon', 'phenom', 'pentium', 'celeron', 'xeon'] for word in words)
         is_gpu_query = any(word in ['gtx', 'rtx', 'radeon', 'rx', 'geforce'] for word in words)
         is_ram_query = any(word in ['ddr', 'kingston', 'corsair', 'g.skill'] for word in words)
         is_socket_query = any(word in ['am4', 'am5', 'lga1700', 'lga1200', 'lga1151', 'lga1150', 'lga1155', 'lga1156', 'lga1366', 'socket', 'pcie', 'ddr2', 'ddr3', 'ddr4', 'ddr5'] for word in words)
         
-        # Извлекаем точную модель для CPU
         exact_cpu_model = None
         exact_cpu_series = None
         
         if is_cpu_query:
-            # Для Ryzen: ищем "ryzen 5", "ryzen 7" и т.д.
             ryzen_match = re.search(r'ryzen\s+([3579]|1[0-9])', query_lower)
             if ryzen_match:
                 exact_cpu_model = f"ryzen {ryzen_match.group(1)}"
                 exact_cpu_series = ryzen_match.group(1)
-            
-            # Для Intel: ищем "i5", "i7" и т.д.
             if not exact_cpu_model:
                 intel_match = re.search(r'(i[3579]|i[1-9][0-9])', query_lower)
                 if intel_match:
                     exact_cpu_model = intel_match.group(0)
         
-        # Для сокетов - формируем точный запрос
         exact_socket = None
         if is_socket_query:
-            # Ищем точный сокет
             socket_patterns = ['am4', 'am5', 'lga1700', 'lga1200', 'lga1151', 'lga1150', 'lga1155', 'lga1156', 'lga1366', 'socket 775', 'pcie x16', 'ddr2', 'ddr3', 'ddr4', 'ddr5']
             for pattern in socket_patterns:
                 if pattern in query_lower:
@@ -133,17 +136,14 @@ class SmartCompatibilityBot:
             comp_type = str(comp.get('Type', '')).lower()
             socket = str(comp.get('Socket', '')).lower()
             
-            # Пропускаем служебные строки
             if name.startswith('#') or name.startswith('==='):
                 continue
             
-            # Если ищем сокет - проверяем только сокет
             if exact_socket:
                 if exact_socket in socket or socket == exact_socket:
                     results.append(comp)
                 continue
             
-            # Фильтрация по типу запроса
             if is_cpu_query and comp_type != 'cpu':
                 continue
             if is_gpu_query and comp_type != 'gpu':
@@ -151,26 +151,20 @@ class SmartCompatibilityBot:
             if is_ram_query and comp_type != 'ram':
                 continue
             
-            # Для CPU запросов с точной моделью
             if is_cpu_query and exact_cpu_model:
-                # Проверяем точное совпадение модели
                 if exact_cpu_model in name:
                     results.append(comp)
                     continue
-                # Для Ryzen: дополнительная проверка
                 if 'ryzen' in query_lower and 'ryzen' in name and exact_cpu_series:
-                    # Проверяем, что это точно нужная серия
                     if re.search(f'ryzen\\s+{exact_cpu_series}', name):
                         results.append(comp)
                         continue
-                continue  # Пропускаем, если не подходит под точную модель
+                continue
             
-            # Если нет точной модели - обычный поиск
             if query_lower in name:
                 results.append(comp)
                 continue
             
-            # Проверка по отдельным словам (только если не сокет)
             if not exact_socket and len(words) > 1:
                 match_count = 0
                 for word in words:
@@ -178,12 +172,10 @@ class SmartCompatibilityBot:
                         match_count += 2
                     elif word in comp_type or word in socket:
                         match_count += 1
-                
                 min_matches = len(words) * 0.7
                 if match_count >= min_matches:
                     results.append(comp)
         
-        # Удаляем дубликаты
         seen = set()
         unique_results = []
         for comp in results:
@@ -192,7 +184,6 @@ class SmartCompatibilityBot:
                 seen.add(comp_id)
                 unique_results.append(comp)
         
-        # Финальная фильтрация для Ryzen
         if is_cpu_query and 'ryzen' in query_lower:
             ryzen_series_match = re.search(r'ryzen\s+([3579]|1[0-9])', query_lower)
             if ryzen_series_match:
@@ -201,12 +192,9 @@ class SmartCompatibilityBot:
                 for comp in unique_results:
                     name = str(comp.get('Name', '')).lower()
                     if 'ryzen' in name:
-                        # Проверяем, что серия совпадает
                         if re.search(f'ryzen\\s+{target_series}', name):
                             filtered.append(comp)
-                        # Проверяем альтернативный формат: "Ryzen 5 5600X"
                         elif target_series in name and 'ryzen' in name:
-                            # Исключаем другие серии
                             if not re.search(r'ryzen\s+[^' + target_series + r']', name):
                                 filtered.append(comp)
                     else:
@@ -238,14 +226,88 @@ class SmartCompatibilityBot:
         except Exception as e:
             return None, f"Ошибка: {e}"
     
+    def predict_pair(self, cpu_name, mb_name):
+        """Проверка совместимости пары CPU + Материнская плата"""
+        # Ищем компоненты
+        cpu = self.find_component_by_name(cpu_name)
+        mb = self.find_component_by_name(mb_name)
+        
+        if not cpu:
+            return f" Процессор '{cpu_name}' не найден"
+        if not mb:
+            return f" Материнская плата '{mb_name}' не найдена"
+        
+        # Проверяем типы
+        if cpu.get('Type') != 'CPU':
+            return f" '{cpu.get('Name')}' не является процессором"
+        if mb.get('Type') != 'MB':
+            return f" '{mb.get('Name')}' не является материнской платой"
+        
+        cpu_socket = cpu.get('Socket', '')
+        mb_socket = mb.get('Socket', '')
+        cpu_name_full = cpu.get('Name', '')
+        mb_name_full = mb.get('Name', '')
+        
+        # Базовая проверка сокетов
+        socket_match = cpu_socket == mb_socket
+        
+        # Получаем предсказания для каждого компонента
+        cpu_pred, cpu_prob = self.predict_component(cpu)
+        mb_pred, mb_prob = self.predict_component(mb)
+        
+        # Формируем результат
+        result_text = ""
+        result_text += f"\n╔══════════════════════════════════════════════════════════════╗"
+        result_text += f"\n║              ПРОВЕРКА СВЯЗКИ КОМПОНЕНТОВ                     ║"
+        result_text += f"\n╠══════════════════════════════════════════════════════════════╣"
+        result_text += f"\n║  Процессор: {cpu_name_full[:40]}" + " "*(40-len(cpu_name_full[:40])) + "║"
+        result_text += f"\n║  Сокет CPU: {cpu_socket}" + " "*(51-len(cpu_socket)) + "║"
+        result_text += f"\n║  Материнская плата: {mb_name_full[:35]}" + " "*(45-len(mb_name_full[:35])) + "║"
+        result_text += f"\n║  Сокет MB: {mb_socket}" + " "*(51-len(mb_socket)) + "║"
+        result_text += f"\n╠══════════════════════════════════════════════════════════════╣"
+        
+        # Проверка сокетов
+        if socket_match:
+            result_text += f"\n║   Сокеты совпадают: {cpu_socket} == {mb_socket}" + " "*(30-len(cpu_socket)-len(mb_socket)) + "║"
+        else:
+            result_text += f"\n║   Сокеты НЕ совпадают: {cpu_socket} != {mb_socket}" + " "*(30-len(cpu_socket)-len(mb_socket)) + "║"
+        
+        # Индивидуальные предсказания
+        if cpu_pred is not None:
+            cpu_status = "" if cpu_pred == 1 else ""
+            result_text += f"\n║  CPU совместимость: {cpu_status} {cpu_prob*100:.1f}%{' '*(40-len(str(int(cpu_prob*100))))}║"
+        if mb_pred is not None:
+            mb_status = "" if mb_pred == 1 else ""
+            result_text += f"\n║  MB совместимость:  {mb_status} {mb_prob*100:.1f}%{' '*(40-len(str(int(mb_prob*100))))}║"
+        
+        # Общий вердикт
+        result_text += f"\n╠══════════════════════════════════════════════════════════════╣"
+        
+        # Логика определения общей совместимости
+        if socket_match and cpu_pred == 1 and mb_pred == 1:
+            verdict = " СОВМЕСТИМЫ"
+            confidence = (cpu_prob + mb_prob) / 2 * 100
+        elif socket_match and (cpu_pred == 1 or mb_pred == 1):
+            verdict = " ВОЗМОЖНО СОВМЕСТИМЫ (требуется проверка)"
+            confidence = (cpu_prob + mb_prob) / 2 * 100
+        else:
+            verdict = " НЕ СОВМЕСТИМЫ"
+            confidence = (cpu_prob + mb_prob) / 2 * 100
+        
+        result_text += f"\n║  Общий вердикт: {verdict}" + " "*(48-len(verdict)) + "║"
+        result_text += f"\n║  Уверенность: {confidence:.1f}%{' '*(48-len(f'{confidence:.1f}%'))}║"
+        result_text += f"\n╚══════════════════════════════════════════════════════════════╝"
+        
+        return result_text
+    
     def predict_with_params(self, type_comp, socket, tdp, price):
         if not self.is_loaded:
             return "Модель не загружена"
         try:
             if type_comp not in self.label_encoders['Type'].classes_:
-                return f"❌ Тип '{type_comp}' не найден. Доступные типы: {self.label_encoders['Type'].classes_.tolist()}"
+                return f" Тип '{type_comp}' не найден. Доступные типы: {self.label_encoders['Type'].classes_.tolist()}"
             if socket not in self.label_encoders['Socket'].classes_:
-                return f"❌ Сокет '{socket}' не найден. Доступные сокеты: {self.label_encoders['Socket'].classes_.tolist()}"
+                return f" Сокет '{socket}' не найден. Доступные сокеты: {self.label_encoders['Socket'].classes_.tolist()}"
             type_encoded = self.label_encoders['Type'].transform([type_comp])[0]
             socket_encoded = self.label_encoders['Socket'].transform([socket])[0]
             numeric = self.scaler.transform([[tdp, price]])[0]
@@ -269,13 +331,11 @@ class SmartCompatibilityBot:
 ╚══════════════════════════════════════════════════════════════╝
 """
         except Exception as e:
-            return f"❌ Ошибка: {e}"
+            return f" Ошибка: {e}"
     
     def show_full_group(self, comp_type):
-        """Показать все компоненты определенного типа из последнего поиска"""
         if not self.last_grouped:
-            return "❌ Сначала выполните поиск командой predict"
-        
+            return " Сначала выполните поиск командой predict"
         comp_type_lower = comp_type.lower()
         found = False
         for key in self.last_grouped.keys():
@@ -283,42 +343,30 @@ class SmartCompatibilityBot:
                 comp_type = key
                 found = True
                 break
-        
         if not found:
             available = ", ".join(self.last_grouped.keys())
-            return f"❌ Тип '{comp_type}' не найден. Доступны: {available}"
-        
+            return f" Тип '{comp_type}' не найден. Доступны: {available}"
         comps = self.last_grouped[comp_type]
-        
-        output = f"\n📁 {comp_type.upper()} (все {len(comps)} компонентов):\n" + "="*60 + "\n"
-        
+        output = f"\n {comp_type.upper()} (все {len(comps)} компонентов):\n" + "="*60 + "\n"
         for i, comp in enumerate(comps, 1):
             name = str(comp.get('Name', 'Unknown'))
             socket = str(comp.get('Socket', 'N/A'))
             tdp = comp.get('TDP', 0)
             price = comp.get('Price', 0)
             pred, prob = self.predict_component(comp)
-            
             output += f"\n{i}. {name}\n"
             output += f"     Сокет: {socket}, TDP: {tdp}Вт, Цена: {price}руб\n"
             if pred is not None:
-                result = "✅ СОВМЕСТИМ" if pred == 1 else "❌ НЕ СОВМЕСТИМ"
+                result = " СОВМЕСТИМ" if pred == 1 else " НЕ СОВМЕСТИМ"
                 output += f"     Совместимость: {result} (уверенность: {prob*100:.1f}%)\n"
-        
         return output
     
     def show_search_results(self, query):
-        """Показать результаты поиска с группировкой"""
         results = self.smart_search(query)
-        
-        # Сохраняем результаты
         self.last_search_results = results
         self.last_search_query = query
-        
         if not results:
-            return f"❌ Компоненты по запросу '{query}' не найдены"
-        
-        # Фильтруем мусор
+            return f" Компоненты по запросу '{query}' не найдены"
         filtered_results = []
         for comp in results:
             name = str(comp.get('Name', ''))
@@ -327,42 +375,34 @@ class SmartCompatibilityBot:
             if comp.get('TDP', '') == '' or comp.get('Price', '') == '':
                 continue
             filtered_results.append(comp)
-        
         if not filtered_results:
-            return f"❌ По запросу '{query}' найдены только служебные строки"
-        
-        output = f"\n🔍 Найдено {len(filtered_results)} компонентов по запросу '{query}':\n" + "="*60 + "\n"
-        
-        # Группируем по типу
+            return f" По запросу '{query}' найдены только служебные строки"
+        output = f"\n Найдено {len(filtered_results)} компонентов по запросу '{query}':\n" + "="*60 + "\n"
         grouped = {}
         for comp in filtered_results:
             comp_type = str(comp.get('Type', 'Unknown'))
             if comp_type not in grouped:
                 grouped[comp_type] = []
             grouped[comp_type].append(comp)
-        
         self.last_grouped = grouped
-        
         for comp_type in sorted(grouped.keys()):
             count = len(grouped[comp_type])
-            output += f"\n📁 {comp_type} ({count}):\n"
+            output += f"\n {comp_type} ({count}):\n"
             for i, comp in enumerate(grouped[comp_type][:5], 1):
                 name = str(comp.get('Name', 'Unknown'))
                 socket = str(comp.get('Socket', 'N/A'))
                 tdp = comp.get('TDP', 0)
                 price = comp.get('Price', 0)
                 pred, prob = self.predict_component(comp)
-                
                 output += f"\n  {i}. {name}\n"
                 output += f"     Сокет: {socket}, TDP: {tdp}Вт, Цена: {price}руб\n"
                 if pred is not None:
-                    result = "✅ СОВМЕСТИМ" if pred == 1 else "❌ НЕ СОВМЕСТИМ"
+                    result = " СОВМЕСТИМ" if pred == 1 else " НЕ СОВМЕСТИМ"
                     output += f"     Совместимость: {result} (уверенность: {prob*100:.1f}%)\n"
             if len(grouped[comp_type]) > 5:
                 remaining = len(grouped[comp_type]) - 5
                 output += f"\n  ... и еще {remaining} компонентов\n"
                 output += f"  💡 Для просмотра всех: more {comp_type}\n"
-        
         return output
     
     def show_help(self):
@@ -372,12 +412,15 @@ class SmartCompatibilityBot:
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                              ║
 ║   ОСНОВНЫЕ КОМАНДЫ:                                          ║
-║  ────────────────────────────────────────────────────────────║
+║  ─────────────────────────────────────────────────────────── ║
 ║  predict <название_компонента>                               ║
 ║    - Поиск и проверка совместимости компонента               ║
 ║    - Пример: predict ryzen 5                                 ║
-║    - Пример: predict gtx 1060                                ║
 ║    - Пример: predict am4                                     ║
+║                                                              ║
+║  pair cpu <название> mb <название>                           ║
+║    - Проверка совместимости пары CPU + MB                    ║
+║    - Пример: pair cpu "Ryzen 5 5600X" mb "B550"              ║
 ║                                                              ║
 ║  more <тип>                                                  ║
 ║    - Показать ВСЕ компоненты указанного типа                 ║
@@ -403,22 +446,21 @@ class SmartCompatibilityBot:
     
     def show_types(self):
         if self.label_encoders:
-            return f"📋 Доступные типы: {', '.join(self.label_encoders['Type'].classes_.tolist())}"
-        return "❌ Данные не загружены"
+            return f" Доступные типы: {', '.join(self.label_encoders['Type'].classes_.tolist())}"
+        return " Данные не загружены"
     
     def show_sockets(self):
         if self.label_encoders:
-            return f"📋 Доступные сокеты: {', '.join(self.label_encoders['Socket'].classes_.tolist())}"
-        return "❌ Данные не загружены"
+            return f" Доступные сокеты: {', '.join(self.label_encoders['Socket'].classes_.tolist())}"
+        return " Данные не загружены"
     
     def run(self):
-        """Запуск чат-бота"""
         print("=" * 60)
-        print("🧠 УМНЫЙ ЧАТ-БОТ ДЛЯ ПРОВЕРКИ СОВМЕСТИМОСТИ КОМПОНЕНТОВ")
+        print(" УМНЫЙ ЧАТ-БОТ ДЛЯ ПРОВЕРКИ СОВМЕСТИМОСТИ КОМПОНЕНТОВ")
         print("=" * 60)
         
         if not self.is_loaded:
-            print("⚠️ Модель не загружена. Попробуйте перезапустить.")
+            print(" Модель не загружена. Попробуйте перезапустить.")
             return
         
         print(self.show_help())
@@ -454,23 +496,49 @@ class SmartCompatibilityBot:
                                 continue
                             except ValueError:
                                 pass
-                        
                         query = " ".join(args)
                         result = self.show_search_results(query)
                         print(result)
                     else:
-                        print("❌ Используйте:")
+                        print(" Используйте:")
                         print("  predict <название_компонента>")
                         print("  predict <тип> <сокет> <TDP> <цена>")
-                        print("")
-                        print("Примеры:")
-                        print("  predict ryzen 5")
-                        print("  predict CPU LGA1700 65 14500")
                         print("  predict am4")
+                
+                elif cmd in ["pair"]:
+                    # Формат: pair cpu "название" mb "название"
+                    # Ищем cpu и mb
+                    try:
+                        # Простой парсинг: ищем cpu и mb в аргументах
+                        args_str = " ".join(args)
+                        
+                        # Ищем позиции cpu и mb
+                        cpu_match = re.search(r'cpu\s+([^m]+?)(?:\s+mb|$)', args_str, re.IGNORECASE)
+                        mb_match = re.search(r'mb\s+(.+)$', args_str, re.IGNORECASE)
+                        
+                        if cpu_match and mb_match:
+                            cpu_name = cpu_match.group(1).strip()
+                            mb_name = mb_match.group(1).strip()
+                            
+                            # Убираем лишние кавычки
+                            cpu_name = cpu_name.strip('"').strip("'")
+                            mb_name = mb_name.strip('"').strip("'")
+                            
+                            if cpu_name and mb_name:
+                                result = self.predict_pair(cpu_name, mb_name)
+                                print(result)
+                            else:
+                                print("Не удалось распознать названия компонентов")
+                        else:
+                            print(" Используйте: pair cpu <название> mb <название>")
+                            print("Пример: pair cpu \"Ryzen 5 5600X\" mb \"B550\"")
+                    except Exception as e:
+                        print(f" Ошибка при разборе команды: {e}")
+                        print("Пример: pair cpu \"Ryzen 5 5600X\" mb \"B550\"")
                 
                 elif cmd in ["more", "m"]:
                     if len(args) != 1:
-                        print("❌ Используйте: more <тип>")
+                        print(" Используйте: more <тип>")
                         print("Пример: more CPU")
                         continue
                     result = self.show_full_group(args[0])
@@ -483,14 +551,14 @@ class SmartCompatibilityBot:
                     print(self.show_sockets())
                 
                 else:
-                    print(f"❌ Неизвестная команда: {cmd}")
+                    print(f" Неизвестная команда: {cmd}")
                     print("Введите 'help' для списка команд")
                 
             except KeyboardInterrupt:
-                print("\n\n👋 До свидания!")
+                print("\n\nДо свидания!")
                 break
             except Exception as e:
-                print(f"❌ Ошибка: {e}")
+                print(f" Ошибка: {e}")
 
 def main():
     bot = SmartCompatibilityBot()
